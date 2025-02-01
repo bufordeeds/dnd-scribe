@@ -1,59 +1,92 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, GuildMember } from 'discord.js';
-import { joinVoiceChannel, VoiceConnectionStatus } from '@discordjs/voice';
+import { AudioRecorder } from '../services/audioRecorder.js';
+
+// Singleton instance of AudioRecorder
+const audioRecorder = new AudioRecorder();
 
 export const data = new SlashCommandBuilder()
   .setName('join')
-  .setDescription('Joins your voice channel')
-  .setDMPermission(false); // Explicitly disable DM usage
+  .setDescription('Joins your voice channel and starts recording')
+  .setDMPermission(false) // Explicitly disable DM usage
+  .addStringOption((option) =>
+    option.setName('campaign').setDescription('The name of the D&D campaign').setRequired(false),
+  );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   console.log('Join command received');
 
   try {
+    console.log('[Join Command] Starting execution...');
+
     if (!interaction.guild) {
-      console.log('Command used outside of guild');
+      console.log('[Join Command] Error: Command used outside of guild');
       return interaction.reply({
         content: 'This command can only be used in a server!',
         flags: ['Ephemeral'],
       });
     }
 
-    // Defer the reply for longer operations
+    console.log('[Join Command] Deferring reply...');
     await interaction.deferReply();
+    console.log('[Join Command] Reply deferred');
 
     // Check if the user is in a voice channel
     const member = interaction.member as GuildMember;
     const voiceChannel = member.voice.channel;
 
-    console.log('User voice state:', {
+    console.log('[Join Command] User voice state:', {
       inVoiceChannel: !!voiceChannel,
       channelId: voiceChannel?.id,
       channelName: voiceChannel?.name,
       guildId: interaction.guild.id,
       guildName: interaction.guild.name,
+      userId: member.id,
+      userName: member.user.tag,
     });
 
     if (!voiceChannel) {
+      console.log('[Join Command] Error: User not in a voice channel');
       return interaction.editReply('You need to be in a voice channel first!');
     }
 
-    const connection = joinVoiceChannel({
+    console.log('[Join Command] Checking for existing session...');
+    // Check if there's already an active session
+    const existingSession = audioRecorder.getActiveSession(voiceChannel.guild.id);
+    if (existingSession) {
+      console.log('[Join Command] Error: Active session already exists', {
+        existingSessionId: existingSession.sessionId,
+      });
+      return interaction.editReply(
+        'Already recording in a voice channel! Use /leave to stop the current recording first.',
+      );
+    }
+
+    console.log('[Join Command] Getting campaign name...');
+    // Get campaign name if provided
+    const campaignName = interaction.options.getString('campaign') ?? undefined;
+
+    console.log('[Join Command] Starting recording...', {
       channelId: voiceChannel.id,
-      guildId: voiceChannel.guild.id,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
+      channelName: voiceChannel.name,
+      campaignName,
     });
 
-    // Handle connection ready state
-    connection.on(VoiceConnectionStatus.Ready, () => {
-      console.log('Voice connection is ready!');
+    // Start recording
+    const session = await audioRecorder.startRecording(voiceChannel, campaignName);
+
+    console.log('[Join Command] Recording started successfully:', {
+      channelName: voiceChannel.name,
+      sessionId: session.sessionId,
+      campaignName: session.campaignName,
     });
 
-    console.log('Successfully joined voice channel:', voiceChannel.name);
-    await interaction.editReply(`Joined voice channel: ${voiceChannel.name}! Ready to record.`);
+    await interaction.editReply(
+      `Joined ${voiceChannel.name} and started recording!${
+        campaignName ? ` (Campaign: ${campaignName})` : ''
+      }`,
+    );
   } catch (error) {
-    console.error('Error in join command:', error);
+    console.error('[Join Command] Error:', error);
 
     // If we haven't replied yet, defer the reply
     if (!interaction.deferred && !interaction.replied) {

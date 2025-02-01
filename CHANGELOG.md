@@ -5,6 +5,19 @@ All notable changes to DND Scribe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2024-02-01
+
+### Added
+
+- AWS Infrastructure Setup
+  - Implemented automatic S3 bucket creation and configuration
+    - Audio input bucket for storing recorded sessions
+    - Transcription output bucket for AWS Transcribe results
+  - Configured bucket policies for AWS Transcribe service access
+  - Added test transcription job functionality
+  - Integrated AWS setup with bot initialization
+  - Implemented graceful handling of existing AWS resources
+
 ## [0.1.0] - 2024-01-31
 
 ### Added

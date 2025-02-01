@@ -1,9 +1,19 @@
 import { Client, Collection, Events, GatewayIntentBits, Interaction } from 'discord.js';
 import { config } from 'dotenv';
 import * as fs from 'fs';
+import { setupAWSInfrastructure } from './services/aws-setup.js';
 
 // Initialize dotenv
 config();
+
+// Initialize AWS Infrastructure
+try {
+  const awsInfra = await setupAWSInfrastructure();
+  console.log('AWS Infrastructure initialized:', awsInfra);
+} catch (error) {
+  console.error('Failed to initialize AWS infrastructure:', error);
+  process.exit(1);
+}
 
 import { SlashCommand } from './types/commands.js';
 

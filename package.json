@@ -11,7 +11,8 @@
     "watch": "tsc -w",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
-    "deploy": "node --loader ts-node/esm src/deploy-commands.ts"
+    "deploy": "node --loader ts-node/esm src/deploy-commands.ts",
+    "deploy-and-dev": "npm run deploy && sleep 5 && npm run dev"
   },
   "dependencies": {
     "@aws-sdk/client-iam": "^3.738.0",

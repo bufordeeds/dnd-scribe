@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - AWS Infrastructure Setup
   - Implemented automatic S3 bucket creation and configuration
-    - Audio input bucket for storing recorded sessions
-    - Transcription output bucket for AWS Transcribe results
+    - Audio input bucket for storing recorded sessions (us-east-2)
+    - Transcription output bucket for AWS Transcribe results (us-east-2)
   - Configured bucket policies for AWS Transcribe service access
   - Added test transcription job functionality
   - Integrated AWS setup with bot initialization

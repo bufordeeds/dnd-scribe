@@ -17,4 +17,5 @@ export interface RecordingMetadata {
   participants: string[];
   fileSize: number;
   duration: number;
+  s3Key: string; // Location of the audio file in S3
 }

@@ -14,7 +14,10 @@ Currently implemented:
 
 - Node.js 18 or higher
 - Discord Bot Token
-- AWS Account (for upcoming features)
+- AWS Account with:
+  - IAM user with S3 and Transcribe permissions
+  - S3 bucket access in us-east-2 region
+  - Amazon Transcribe service access
 
 ## Setup
 
@@ -31,10 +34,17 @@ cd dnd-scribe
 npm install
 ```
 
-3. Create a `.env` file in the root directory with your Discord bot token:
+3. Create a `.env` file in the root directory with your configuration:
 
 ```env
+# Discord Configuration
 DISCORD_TOKEN=your_bot_token_here
+
+# AWS Configuration
+AWS_REGION=us-east-2
+PROJECT_NAME=your_project_name
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
 ```
 
 4. Build the project:
@@ -54,6 +64,13 @@ npm run deploy-commands
 ```bash
 npm start
 ```
+
+## AWS Setup
+
+1. Create an IAM user in the AWS Console (us-east-2 region)
+2. Attach policies for S3 and Transcribe services
+3. Generate access keys and add them to your .env file
+4. The bot will automatically create the necessary S3 buckets on startup
 
 ## Usage
 

@@ -10,6 +10,8 @@ import { pipeline } from 'stream/promises';
 import * as prism from 'prism-media';
 import type { VoiceBasedChannel } from 'discord.js';
 import type { VoiceRecordingSession, RecordingMetadata } from '../types/voice.js';
+import { convertPcmToMp3 } from '../utils/audioProcessor.js';
+import { uploadAudioToS3 } from './aws-setup.js';
 
 export class AudioRecorder {
   private activeSessions: Map<string, VoiceRecordingSession> = new Map();
@@ -308,6 +310,34 @@ export class AudioRecorder {
         fs.stat(`./recordings/${session.sessionId}.pcm`),
       );
 
+      // Convert PCM to MP3
+      const pcmPath = `./recordings/${session.sessionId}.pcm`;
+      const mp3Path = `./recordings/${session.sessionId}.mp3`;
+
+      console.log('[AudioRecorder] Converting PCM to MP3...');
+      await convertPcmToMp3(pcmPath, mp3Path);
+
+      // Upload MP3 to S3
+      console.log('[AudioRecorder] Uploading MP3 to S3...');
+      const s3Key = await uploadAudioToS3(
+        mp3Path,
+        `${session.sessionId}.mp3`,
+        process.env.PROJECT_NAME + '-audio-input',
+      );
+
+      // Clean up temporary files
+      console.log('[AudioRecorder] Cleaning up temporary files...');
+      await import('fs/promises').then(async (fs) => {
+        try {
+          await fs.unlink(pcmPath);
+          await fs.unlink(mp3Path);
+          console.log('[AudioRecorder] Temporary files cleaned up successfully');
+        } catch (error) {
+          console.error('[AudioRecorder] Error cleaning up temporary files:', error);
+          // Continue even if cleanup fails
+        }
+      });
+
       const metadata: RecordingMetadata = {
         sessionId: session.sessionId,
         campaignName: session.campaignName,
@@ -316,10 +346,11 @@ export class AudioRecorder {
         participants: session.participants,
         fileSize: stats.size,
         duration: (new Date().getTime() - session.startTime.getTime()) / 1000,
+        s3Key,
       };
 
       this.activeSessions.delete(guildId);
-      console.log('[AudioRecorder] Recording stopped successfully');
+      console.log('[AudioRecorder] Recording stopped and uploaded successfully');
 
       return metadata;
     } catch (error: unknown) {

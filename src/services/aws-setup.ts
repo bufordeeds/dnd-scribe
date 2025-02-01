@@ -3,6 +3,7 @@ import {
   CreateBucketCommand,
   PutBucketPolicyCommand,
   PutObjectCommand,
+  BucketLocationConstraint,
 } from '@aws-sdk/client-s3';
 import { createReadStream } from 'fs';
 import {
@@ -20,6 +21,50 @@ interface BucketNames {
   output: string;
 }
 
+// Helper function to create a single bucket with retries
+async function createBucketWithRetry(bucketName: string, maxRetries = 5): Promise<void> {
+  let attempt = 0;
+  const baseDelay = 5000; // Start with 5 second delay
+
+  while (attempt < maxRetries) {
+    try {
+      await s3Client.send(
+        new CreateBucketCommand({
+          Bucket: bucketName,
+          CreateBucketConfiguration: {
+            LocationConstraint: process.env.AWS_REGION as BucketLocationConstraint,
+          },
+        }),
+      );
+      console.log(`Created bucket: ${bucketName}`);
+      return;
+    } catch (error: any) {
+      if (error.Code === 'BucketAlreadyOwnedByYou') {
+        console.log(`Using existing bucket: ${bucketName}`);
+        return;
+      }
+
+      if (error.Code === 'OperationAborted') {
+        attempt++;
+        if (attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(
+            `Bucket creation aborted, retrying in ${
+              delay / 1000
+            } seconds... (Attempt ${attempt}/${maxRetries})`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`Failed to create bucket ${bucketName} after ${maxRetries} attempts`);
+}
+
 // Create S3 buckets for audio input and transcription output
 async function createS3Buckets(): Promise<BucketNames> {
   const bucketNames = {
@@ -28,36 +73,9 @@ async function createS3Buckets(): Promise<BucketNames> {
   };
 
   try {
-    // Check if buckets exist first
-    try {
-      await s3Client.send(
-        new CreateBucketCommand({
-          Bucket: bucketNames.input,
-        }),
-      );
-      console.log(`Created input bucket: ${bucketNames.input}`);
-    } catch (error: any) {
-      if (error.Code === 'BucketAlreadyOwnedByYou') {
-        console.log(`Using existing input bucket: ${bucketNames.input}`);
-      } else {
-        throw error;
-      }
-    }
-
-    try {
-      await s3Client.send(
-        new CreateBucketCommand({
-          Bucket: bucketNames.output,
-        }),
-      );
-      console.log(`Created output bucket: ${bucketNames.output}`);
-    } catch (error: any) {
-      if (error.Code === 'BucketAlreadyOwnedByYou') {
-        console.log(`Using existing output bucket: ${bucketNames.output}`);
-      } else {
-        throw error;
-      }
-    }
+    // Create buckets with retry logic
+    await createBucketWithRetry(bucketNames.input);
+    await createBucketWithRetry(bucketNames.output);
 
     // Set bucket policies for Transcribe access
     const inputBucketPolicy = {

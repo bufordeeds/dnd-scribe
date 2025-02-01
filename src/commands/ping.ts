@@ -5,10 +5,11 @@ export const data = new SlashCommandBuilder()
   .setDescription('Shows bot status and latency information');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const sent = await interaction.reply({
-    content: 'Pinging...',
-    fetchReply: true,
-  });
+  const sent = await interaction
+    .reply({
+      content: 'Pinging...',
+    })
+    .then((response) => response.fetch());
 
   const latency = sent.createdTimestamp - interaction.createdTimestamp;
   const wsLatency = interaction.client.ws.ping;
@@ -30,7 +31,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       {
         name: '⚙️ System',
         value: `
-          • Uptime: ${uptime}s
+          • Uptime: ${(uptime / 3600).toFixed(2)}h
           • Memory: ${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB
         `.trim(),
         inline: true,

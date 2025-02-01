@@ -53,7 +53,11 @@ const loadCommands = async () => {
     const command = await import(filePath);
 
     if ('data' in command && 'execute' in command) {
-      client.commands.set(command.data.name, command);
+      // Set just the command data and execute function
+      client.commands.set(command.data.name, {
+        data: command.data,
+        execute: command.execute,
+      });
     }
   }
 };

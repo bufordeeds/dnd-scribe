@@ -44,7 +44,7 @@ client.commands = new Collection();
 
 // Load command files
 const commandsPath = new URL('commands', import.meta.url).pathname;
-const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.ts'));
+const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.js'));
 
 // Load all commands
 const loadCommands = async () => {

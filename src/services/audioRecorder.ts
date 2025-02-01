@@ -54,7 +54,7 @@ export class AudioRecorder {
             entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
           ]);
           // Seems to be reconnecting to a new channel
-        } catch (error) {
+        } catch (error: unknown) {
           // Seems to be a real disconnection
           console.error('Voice Connection disconnected:', error);
           connection.destroy();
@@ -153,19 +153,19 @@ export class AudioRecorder {
       });
 
       // Handle stream errors with more detailed logging
-      opusStream.on('error', (error) => {
+      opusStream.on('error', (error: Error) => {
         console.error('[AudioRecorder] Opus stream error:', error);
         console.error('[AudioRecorder] Stack trace:', error.stack);
         this.stopRecording(guildId).catch(console.error);
       });
 
-      pcmStream.on('error', (error) => {
+      pcmStream.on('error', (error: Error) => {
         console.error('[AudioRecorder] PCM stream error:', error);
         console.error('[AudioRecorder] Stack trace:', error.stack);
         this.stopRecording(guildId).catch(console.error);
       });
 
-      fileStream.on('error', (error) => {
+      fileStream.on('error', (error: Error) => {
         console.error('[AudioRecorder] File stream error:', error);
         console.error('[AudioRecorder] Stack trace:', error.stack);
         this.stopRecording(guildId).catch(console.error);
@@ -190,22 +190,39 @@ export class AudioRecorder {
       this.activeSessions.set(guildId, session);
 
       console.log('[AudioRecorder] Setting up audio pipeline...');
-      // Set up pipeline in the background with more detailed error handling
-      pipeline(opusStream, pcmStream, fileStream)
-        .then(() => {
-          console.log('[AudioRecorder] Audio pipeline established successfully');
-          console.log('[AudioRecorder] Recording to file:', outputFile);
-        })
-        .catch((error) => {
+      // Set up pipeline with proper error handling for voice disconnection
+      const pipelinePromise = pipeline(opusStream, pcmStream, fileStream);
+
+      // Handle pipeline completion/errors without throwing
+      pipelinePromise.catch((error: unknown) => {
+        if (
+          error instanceof Error &&
+          (error as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE'
+        ) {
+          console.log('[AudioRecorder] Pipeline closed due to voice disconnection');
+        } else {
           console.error('[AudioRecorder] Pipeline error:', error);
-          console.error('[AudioRecorder] Stack trace:', error.stack);
+          if (error instanceof Error) {
+            console.error('[AudioRecorder] Stack trace:', error.stack);
+          }
           console.error('[AudioRecorder] Pipeline state:', {
             opusStreamDestroyed: opusStream.destroyed,
             pcmStreamDestroyed: pcmStream.destroyed,
             fileStreamClosed: fileStream.closed,
           });
-          this.stopRecording(guildId).catch(console.error);
-        });
+        }
+      });
+
+      console.log('[AudioRecorder] Audio pipeline established');
+      console.log('[AudioRecorder] Recording to file:', outputFile);
+
+      // Add cleanup handler for voice connection
+      connection.on(VoiceConnectionStatus.Destroyed, () => {
+        console.log('[AudioRecorder] Voice connection destroyed, closing streams...');
+        if (!fileStream.closed) {
+          fileStream.end();
+        }
+      });
 
       // Listen for speaking events to track participants
       receiver.speaking.on('start', (userId) => {
@@ -230,8 +247,11 @@ export class AudioRecorder {
       });
 
       return session;
-    } catch (error) {
-      console.error('Error starting recording:', error);
+    } catch (error: unknown) {
+      console.error('[AudioRecorder] Error starting recording:', error);
+      if (error instanceof Error) {
+        console.error('[AudioRecorder] Stack trace:', error.stack);
+      }
       throw error;
     }
   }
@@ -240,17 +260,48 @@ export class AudioRecorder {
     const session = this.activeSessions.get(guildId);
     if (!session) return null;
 
-    console.log(`Stopping recording for session ${session.sessionId}`);
+    console.log(`[AudioRecorder] Stopping recording for session ${session.sessionId}`);
 
     try {
-      // Close streams
-      session.audioStream.destroy();
-      await new Promise<void>((resolve, reject) => {
-        session.fileWriter.end((err: Error | null) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
+      // Gracefully close streams
+      try {
+        // First end the file writer if it's not closed
+        if (!session.fileWriter.closed) {
+          await new Promise<void>((resolve, reject) => {
+            session.fileWriter.once('finish', () => {
+              console.log('[AudioRecorder] File writer finished');
+              resolve();
+            });
+            session.fileWriter.once('error', (err) => {
+              console.error('[AudioRecorder] File writer error:', err);
+              reject(err);
+            });
+            session.fileWriter.end();
+          });
+        }
+
+        // Then destroy the voice connection
+        const connection = getVoiceConnection(guildId);
+        if (connection) {
+          console.log('[AudioRecorder] Destroying voice connection');
+          connection.destroy();
+        }
+
+        // Finally destroy the audio stream if needed
+        if (!session.audioStream.destroyed) {
+          session.audioStream.destroy();
+          console.log('[AudioRecorder] Audio stream destroyed');
+        }
+
+        // Wait a moment for any cleanup to complete
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } catch (error: unknown) {
+        console.error('[AudioRecorder] Error during stream cleanup:', error);
+        if (error instanceof Error) {
+          console.error('[AudioRecorder] Stack trace:', error.stack);
+        }
+        // Continue with metadata collection even if stream cleanup fails
+      }
 
       // Get file stats
       const stats = await import('fs/promises').then((fs) =>
@@ -267,14 +318,15 @@ export class AudioRecorder {
         duration: (new Date().getTime() - session.startTime.getTime()) / 1000,
       };
 
-      // Cleanup
-      const connection = getVoiceConnection(guildId);
-      connection?.destroy();
       this.activeSessions.delete(guildId);
+      console.log('[AudioRecorder] Recording stopped successfully');
 
       return metadata;
-    } catch (error) {
-      console.error('Error stopping recording:', error);
+    } catch (error: unknown) {
+      console.error('[AudioRecorder] Error stopping recording:', error);
+      if (error instanceof Error) {
+        console.error('[AudioRecorder] Stack trace:', error.stack);
+      }
       throw error;
     }
   }

@@ -4,6 +4,7 @@ import {
   PutBucketPolicyCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
+import { createReadStream } from 'fs';
 import {
   TranscribeClient,
   StartTranscriptionJobCommand,
@@ -162,6 +163,65 @@ interface AWSInfrastructure {
 }
 
 // Main setup function
+// Upload audio file to S3
+export async function uploadAudioToS3(
+  filePath: string,
+  fileName: string,
+  bucket: string,
+): Promise<string> {
+  try {
+    console.log(`[AWS] Uploading audio file to S3: ${fileName}`);
+    const fileStream = createReadStream(filePath);
+    const s3Key = `recordings/${fileName}`;
+
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: s3Key,
+        Body: fileStream,
+        ContentType: 'audio/mpeg',
+      }),
+    );
+
+    console.log(`[AWS] Successfully uploaded audio file to S3: ${s3Key}`);
+    return s3Key;
+  } catch (error) {
+    console.error('[AWS] Error uploading audio file to S3:', error);
+    throw error;
+  }
+}
+
+// Start a transcription job
+export async function startTranscriptionJob(
+  s3Key: string,
+  inputBucket: string,
+  outputBucket: string,
+  sessionId: string,
+): Promise<void> {
+  try {
+    console.log(`[AWS] Starting transcription job for: ${s3Key}`);
+
+    const transcriptionJob = {
+      TranscriptionJobName: `session-${sessionId}`,
+      LanguageCode: LanguageCode.EN_US,
+      Media: {
+        MediaFileUri: `s3://${inputBucket}/${s3Key}`,
+      },
+      OutputBucketName: outputBucket,
+      Settings: {
+        ShowSpeakerLabels: true,
+        MaxSpeakerLabels: 10,
+      },
+    };
+
+    await transcribeClient.send(new StartTranscriptionJobCommand(transcriptionJob));
+    console.log(`[AWS] Transcription job started successfully: session-${sessionId}`);
+  } catch (error) {
+    console.error('[AWS] Error starting transcription job:', error);
+    throw error;
+  }
+}
+
 export async function setupAWSInfrastructure(): Promise<AWSInfrastructure> {
   try {
     const buckets = await createS3Buckets();

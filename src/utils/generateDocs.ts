@@ -1,22 +1,52 @@
 import fs from 'fs';
 import path from 'path';
 
+// Directories and files to ignore
+const ignoredPaths = [
+  'node_modules',
+  '.git',
+  'dist',
+  'coverage',
+  '.DS_Store',
+  '.env',
+  'recordings',
+];
+
+// Relevant file extensions
+const relevantExtensions = ['.ts', '.js', '.json', '.md'];
+
 // Function to create a file tree structure
 function generateFileTree(dir: string, prefix = ''): string {
   let output = '';
   const items = fs.readdirSync(dir);
 
-  items.forEach((item, index) => {
-    const isLast = index === items.length - 1;
+  // Filter out ignored paths and sort items (directories first)
+  const filteredItems = items
+    .filter((item) => !ignoredPaths.includes(item))
+    .sort((a, b) => {
+      const aPath = path.join(dir, a);
+      const bPath = path.join(dir, b);
+      const aIsDir = fs.statSync(aPath).isDirectory();
+      const bIsDir = fs.statSync(bPath).isDirectory();
+      if (aIsDir && !bIsDir) return -1;
+      if (!aIsDir && bIsDir) return 1;
+      return a.localeCompare(b);
+    });
+
+  filteredItems.forEach((item, index) => {
+    const isLast = index === filteredItems.length - 1;
     const itemPath = path.join(dir, item);
     const stats = fs.statSync(itemPath);
 
-    // Add the current item to the tree
-    output += `${prefix}${isLast ? '└── ' : '├── '}${item}\n`;
+    // Only include directories and files with relevant extensions
+    if (stats.isDirectory() || relevantExtensions.includes(path.extname(item))) {
+      // Add the current item to the tree
+      output += `${prefix}${isLast ? '└── ' : '├── '}${item}\n`;
 
-    // If it's a directory, recurse into it
-    if (stats.isDirectory()) {
-      output += generateFileTree(itemPath, prefix + (isLast ? '    ' : '│   '));
+      // If it's a directory, recurse into it
+      if (stats.isDirectory()) {
+        output += generateFileTree(itemPath, prefix + (isLast ? '    ' : '│   '));
+      }
     }
   });
 

@@ -7,6 +7,7 @@ export interface VoiceRecordingSession {
   participants: string[];
   audioStream: import('stream').Readable;
   fileWriter: import('fs').WriteStream;
+  pipelinePromise: Promise<void>;
 }
 
 export interface RecordingMetadata {

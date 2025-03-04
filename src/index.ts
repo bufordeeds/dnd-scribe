@@ -44,12 +44,12 @@ client.commands = new Collection();
 
 // Load command files
 const commandsPath = new URL('commands', import.meta.url).pathname;
-const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.ts'));
 
 // Load all commands
 const loadCommands = async () => {
   for (const file of commandFiles) {
-    const filePath = new URL(`commands/${file}`, import.meta.url).href;
+    const filePath = `file://${commandsPath}/${file}`;
     const command = await import(filePath);
 
     if ('data' in command && 'execute' in command) {

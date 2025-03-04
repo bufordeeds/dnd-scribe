@@ -142,7 +142,7 @@ async function testTranscriptionSetup(inputBucket: string, outputBucket: string)
   try {
     // Create a dummy test file (1 second of silence in base64)
     const testAudioBase64 =
-      'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAAFbgCenp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6e//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAYAAAAAAAAABW7gxbmvAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+      'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAAFbgCenp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6e//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAYAAAAAAAAABW7gxbmvAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
     const testAudioBuffer = Buffer.from(testAudioBase64, 'base64');
 
     // Upload test audio file to S3
@@ -189,10 +189,42 @@ export async function uploadAudioToS3(
 ): Promise<string> {
   try {
     console.log(`[AWS] Uploading audio file to S3: ${fileName}`);
+    console.log(`[AWS] Using bucket: ${bucket}`);
+    console.log(`[AWS] File path: ${filePath}`);
+
+    // Check AWS credentials
+    console.log(`[AWS] Checking AWS credentials...`);
+    console.log(`[AWS] AWS_REGION: ${process.env.AWS_REGION || 'NOT SET'}`);
+    console.log(
+      `[AWS] AWS_ACCESS_KEY_ID: ${
+        process.env.AWS_ACCESS_KEY_ID ? '****' + process.env.AWS_ACCESS_KEY_ID.slice(-4) : 'NOT SET'
+      }`,
+    );
+    console.log(
+      `[AWS] AWS_SECRET_ACCESS_KEY: ${process.env.AWS_SECRET_ACCESS_KEY ? '****' : 'NOT SET'}`,
+    );
+
+    if (
+      !process.env.AWS_REGION ||
+      !process.env.AWS_ACCESS_KEY_ID ||
+      !process.env.AWS_SECRET_ACCESS_KEY
+    ) {
+      throw new Error(
+        'AWS credentials are missing. Please check your .env file and environment variables.',
+      );
+    }
+
+    // Check if file exists and is readable
+    const fs = await import('fs/promises');
+    const stats = await fs.stat(filePath);
+    console.log(`[AWS] File size: ${stats.size} bytes`);
+
     const fileStream = createReadStream(filePath);
     const s3Key = `recordings/${fileName}`;
+    console.log(`[AWS] S3 key: ${s3Key}`);
 
-    await s3Client.send(
+    // Add timeout to S3 upload
+    const uploadPromise = s3Client.send(
       new PutObjectCommand({
         Bucket: bucket,
         Key: s3Key,
@@ -201,10 +233,38 @@ export async function uploadAudioToS3(
       }),
     );
 
+    // Add a timeout to prevent hanging
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('S3 upload timed out after 30 seconds')), 30000);
+    });
+
+    await Promise.race([uploadPromise, timeoutPromise]);
+
     console.log(`[AWS] Successfully uploaded audio file to S3: ${s3Key}`);
     return s3Key;
   } catch (error) {
     console.error('[AWS] Error uploading audio file to S3:', error);
+    if (error instanceof Error) {
+      console.error('[AWS] Error name:', error.name);
+      console.error('[AWS] Error message:', error.message);
+      console.error('[AWS] Error stack:', error.stack);
+    }
+
+    // Provide more specific error messages for common AWS errors
+    if (error instanceof Error) {
+      if (error.message.includes('credentials')) {
+        console.error(
+          '[AWS] CREDENTIAL ERROR: AWS credentials are invalid or not properly loaded.',
+        );
+      } else if (error.message.includes('AccessDenied')) {
+        console.error(
+          '[AWS] ACCESS DENIED: The AWS credentials do not have permission to upload to this bucket.',
+        );
+      } else if (error.message.includes('NoSuchBucket')) {
+        console.error('[AWS] BUCKET ERROR: The specified bucket does not exist.');
+      }
+    }
+
     throw error;
   }
 }

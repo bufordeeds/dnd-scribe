@@ -384,13 +384,13 @@ config();
 
 // Load command files
 const commandsPath = new URL('commands', import.meta.url).pathname;
-const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.ts'));
 
 const commands = [];
 
 // Load all commands
 for (const file of commandFiles) {
-  const filePath = new URL(`commands/${file}`, import.meta.url).href;
+  const filePath = `file://${commandsPath}/${file}`;
   const command = await import(filePath);
   if ('data' in command) {
     commands.push(command.data.toJSON());
@@ -465,12 +465,12 @@ client.commands = new Collection();
 
 // Load command files
 const commandsPath = new URL('commands', import.meta.url).pathname;
-const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith('.ts'));
 
 // Load all commands
 const loadCommands = async () => {
   for (const file of commandFiles) {
-    const filePath = new URL(`commands/${file}`, import.meta.url).href;
+    const filePath = `file://${commandsPath}/${file}`;
     const command = await import(filePath);
 
     if ('data' in command && 'execute' in command) {
@@ -608,7 +608,7 @@ export class AudioRecorder {
       const opusStream = receiver.subscribe('all', {
         end: {
           behavior: EndBehaviorType.AfterSilence,
-          duration: 200, // Increased silence duration before ending
+          duration: 500, // Increased silence duration before ending
         },
         autoDestroy: false, // Prevent automatic destruction
       });
@@ -658,12 +658,19 @@ export class AudioRecorder {
         }
       });
 
-      // Create file stream
-      const fileStream = createWriteStream(outputFile, { flags: 'w' });
+      // Create file stream with a larger buffer
+      const fileStream = createWriteStream(outputFile, {
+        flags: 'w',
+        highWaterMark: 1024 * 1024, // 1MB buffer
+      });
 
       // Add write event logging for file stream
+      let bytesWritten = 0;
       fileStream.on('write', (chunk) => {
-        console.log(`[AudioRecorder] Wrote ${chunk.length} bytes to file`);
+        bytesWritten += chunk.length;
+        console.log(
+          `[AudioRecorder] Wrote ${chunk.length} bytes to file (Total: ${bytesWritten} bytes)`,
+        );
       });
 
       // Handle stream errors with more detailed logging
@@ -808,7 +815,7 @@ export class AudioRecorder {
         }
 
         // Wait a moment for any cleanup to complete
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Increased wait time
       } catch (error: unknown) {
         console.error('[AudioRecorder] Error during stream cleanup:', error);
         if (error instanceof Error) {
@@ -817,54 +824,67 @@ export class AudioRecorder {
         // Continue with metadata collection even if stream cleanup fails
       }
 
-      // Get file stats
-      const stats = await import('fs/promises').then((fs) =>
-        fs.stat(`./recordings/${session.sessionId}.pcm`),
-      );
-
-      // Convert PCM to MP3
       const pcmPath = `./recordings/${session.sessionId}.pcm`;
       const mp3Path = `./recordings/${session.sessionId}.mp3`;
 
-      console.log('[AudioRecorder] Converting PCM to MP3...');
-      await convertPcmToMp3(pcmPath, mp3Path);
+      // Get file stats and ensure PCM file exists
+      const fs = await import('fs/promises');
 
-      // Upload MP3 to S3
-      console.log('[AudioRecorder] Uploading MP3 to S3...');
-      const s3Key = await uploadAudioToS3(
-        mp3Path,
-        `${session.sessionId}.mp3`,
-        process.env.PROJECT_NAME + '-audio-input',
-      );
+      try {
+        const stats = await fs.stat(pcmPath);
 
-      // Clean up temporary files
-      console.log('[AudioRecorder] Cleaning up temporary files...');
-      await import('fs/promises').then(async (fs) => {
-        try {
-          await fs.unlink(pcmPath);
-          await fs.unlink(mp3Path);
-          console.log('[AudioRecorder] Temporary files cleaned up successfully');
-        } catch (error) {
-          console.error('[AudioRecorder] Error cleaning up temporary files:', error);
-          // Continue even if cleanup fails
+        if (stats.size === 0) {
+          console.log('[AudioRecorder] No audio data recorded');
+          await fs.unlink(pcmPath).catch((err) => {
+            console.error('[AudioRecorder] Error deleting PCM file:', err);
+          });
+          return null;
         }
-      });
 
-      const metadata: RecordingMetadata = {
-        sessionId: session.sessionId,
-        campaignName: session.campaignName,
-        startTime: session.startTime,
-        endTime: new Date(),
-        participants: session.participants,
-        fileSize: stats.size,
-        duration: (new Date().getTime() - session.startTime.getTime()) / 1000,
-        s3Key,
-      };
+        // Convert PCM to MP3
+        console.log('[AudioRecorder] Converting PCM to MP3...');
+        await convertPcmToMp3(pcmPath, mp3Path);
 
-      this.activeSessions.delete(guildId);
-      console.log('[AudioRecorder] Recording stopped and uploaded successfully');
+        // Upload MP3 to S3
+        console.log('[AudioRecorder] Uploading MP3 to S3...');
+        const s3Key = await uploadAudioToS3(
+          mp3Path,
+          `${session.sessionId}.mp3`,
+          process.env.PROJECT_NAME + '-audio-input',
+        );
 
-      return metadata;
+        // Clean up temporary files only after successful upload
+        console.log('[AudioRecorder] Cleaning up temporary files...');
+        await fs.unlink(pcmPath).catch((err) => {
+          console.error('[AudioRecorder] Error deleting PCM file:', err);
+        });
+        await fs.unlink(mp3Path).catch((err) => {
+          console.error('[AudioRecorder] Error deleting MP3 file:', err);
+        });
+        console.log('[AudioRecorder] Temporary files cleaned up successfully');
+
+        const metadata: RecordingMetadata = {
+          sessionId: session.sessionId,
+          campaignName: session.campaignName,
+          startTime: session.startTime,
+          endTime: new Date(),
+          participants: session.participants,
+          fileSize: stats.size,
+          duration: (new Date().getTime() - session.startTime.getTime()) / 1000,
+          s3Key,
+        };
+
+        this.activeSessions.delete(guildId);
+        console.log('[AudioRecorder] Recording stopped and uploaded successfully');
+
+        return metadata;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          console.log('[AudioRecorder] No audio data recorded');
+          return null;
+        }
+        throw error;
+      }
     } catch (error: unknown) {
       console.error('[AudioRecorder] Error stopping recording:', error);
       if (error instanceof Error) {

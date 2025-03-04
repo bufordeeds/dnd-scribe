@@ -1,8 +1,8 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, GuildMember } from 'discord.js';
 import { AudioRecorder } from '../services/audioRecorder.js';
 
-// Singleton instance of AudioRecorder
-const audioRecorder = new AudioRecorder();
+// Get the singleton instance of AudioRecorder
+const audioRecorder = AudioRecorder.getInstance();
 
 export const data = new SlashCommandBuilder()
   .setName('join')

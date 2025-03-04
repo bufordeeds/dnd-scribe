@@ -1,11 +1,9 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { getVoiceConnection } from '@discordjs/voice';
 import { AudioRecorder } from '../services/audioRecorder.js';
-import { uploadAudioToS3, startTranscriptionJob } from '../services/aws-setup.js';
-import { convertPcmToMp3 } from '../utils/audioProcessor.js';
 
-// Use the same singleton instance as join command
-const audioRecorder = new AudioRecorder();
+// Get the singleton instance of AudioRecorder
+const audioRecorder = AudioRecorder.getInstance();
 
 export const data = new SlashCommandBuilder()
   .setName('leave')
@@ -25,6 +23,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const connection = getVoiceConnection(interaction.guild.id);
     const activeSession = audioRecorder.getActiveSession(interaction.guild.id);
 
+    console.log('[Leave Command] Current state:', {
+      hasConnection: !!connection,
+      hasActiveSession: !!activeSession,
+      guildId: interaction.guild.id,
+    });
+
     // If no connection and no session, nothing to do
     if (!connection && !activeSession) {
       return interaction.reply({
@@ -33,89 +37,98 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       });
     }
 
-    let response = '';
+    // Initial reply
+    await interaction.reply('🎙️ Stopping recording...');
 
     // Handle active recording session if exists
     if (activeSession) {
       console.log('[Leave Command] Stopping active recording session...');
-      const metadata = await audioRecorder.stopRecording(interaction.guild.id);
+      await interaction.followUp('⏳ Waiting for audio pipeline to complete...');
 
-      if (metadata) {
-        try {
-          // Check if the PCM file exists and has content
-          const fs = await import('fs/promises');
-          const pcmPath = `./recordings/${metadata.sessionId}.pcm`;
-          const mp3Path = `./recordings/${metadata.sessionId}.mp3`;
+      try {
+        // Add a timeout to prevent hanging indefinitely
+        const stopRecordingPromise = audioRecorder.stopRecording(interaction.guild.id);
+        const timeoutPromise = new Promise<null>((_, reject) => {
+          setTimeout(
+            () => reject(new Error('Recording stop operation timed out after 60 seconds')),
+            60000,
+          );
+        });
 
-          const fileStats = await fs.stat(pcmPath).catch(() => null);
-          if (!fileStats || fileStats.size === 0) {
-            console.error('[Leave Command] No audio data recorded');
-            response = 'No audio was recorded during the session.';
-          } else {
-            // Convert PCM to MP3
-            console.log('[Leave Command] Converting PCM to MP3...');
-            await convertPcmToMp3(pcmPath, mp3Path);
+        const metadata = await Promise.race([stopRecordingPromise, timeoutPromise]);
+        console.log('[Leave Command] Recording stopped, metadata:', metadata);
 
-            // Upload MP3 to S3
-            console.log('[Leave Command] Uploading MP3 to S3...');
-            const s3Key = await uploadAudioToS3(
-              mp3Path,
-              `${metadata.sessionId}.mp3`,
-              process.env.PROJECT_NAME + '-audio-input',
-            );
+        if (metadata) {
+          // The audioRecorder.stopRecording method now handles all the processing
+          // We just need to provide feedback to the user
+          const duration = Math.round(metadata.duration);
+          const minutes = Math.floor(duration / 60);
+          const seconds = duration % 60;
+          const participants = metadata.participants.length;
 
-            // Start transcription job
-            console.log('[Leave Command] Starting transcription job...');
-            await startTranscriptionJob(
-              s3Key,
-              process.env.PROJECT_NAME + '-audio-input',
-              process.env.PROJECT_NAME + '-transcription-output',
-              metadata.sessionId,
-            );
-
-            const duration = Math.round(metadata.duration);
-            const minutes = Math.floor(duration / 60);
-            const seconds = duration % 60;
-            const participants = metadata.participants.length;
-
-            response =
-              `Recording stopped! Session details:\n` +
+          // Final summary
+          await interaction.followUp(
+            `✅ Recording completed successfully!\n\n` +
+              `**Session Details:**\n` +
               `• Duration: ${minutes}m ${seconds}s\n` +
               `• Participants: ${participants}\n` +
               `• Campaign: ${metadata.campaignName || 'Not specified'}\n` +
               `• File size: ${Math.round((metadata.fileSize / 1024 / 1024) * 100) / 100}MB\n` +
-              `• Transcription job started: session-${metadata.sessionId}`;
-          }
+              `• Transcription job started: session-${metadata.sessionId}\n\n` +
+              `The transcription will be available soon.`,
+          );
+        } else {
+          console.error('[Leave Command] No metadata returned from stopRecording');
+          await interaction.followUp('❌ Failed to stop recording. No metadata returned.');
+        }
+      } catch (error) {
+        console.error('[Leave Command] Error stopping recording:', error);
+        if (error instanceof Error) {
+          console.error('[Leave Command] Error name:', error.name);
+          console.error('[Leave Command] Error message:', error.message);
+          console.error('[Leave Command] Stack trace:', error.stack);
 
-          // Clean up local files
-          await fs.unlink(pcmPath).catch((error) => {
-            console.error('[Leave Command] Error deleting PCM file:', error);
-          });
-          if (await fs.stat(mp3Path).catch(() => null)) {
-            await fs.unlink(mp3Path).catch((error) => {
-              console.error('[Leave Command] Error deleting MP3 file:', error);
-            });
+          // Provide more specific error messages based on the error
+          if (error.message.includes('timed out')) {
+            await interaction.followUp(
+              '❌ Recording stop operation timed out. The bot may need to be restarted.',
+            );
+          } else {
+            await interaction.followUp(
+              '❌ Failed to stop recording. Please try again or restart the bot.',
+            );
           }
-        } catch (error: unknown) {
-          console.error('[Leave Command] Error processing recording:', error);
-          if (error instanceof Error) {
-            console.error('[Leave Command] Stack trace:', error.stack);
+        } else {
+          await interaction.followUp('❌ Failed to stop recording. Please try again.');
+        }
+
+        // If we timed out, try to force destroy the connection
+        if (error instanceof Error && error.message.includes('timed out')) {
+          try {
+            if (connection) {
+              console.log('[Leave Command] Forcing connection destruction after timeout');
+              connection.destroy();
+            }
+          } catch (destroyError) {
+            console.error('[Leave Command] Error forcing connection destruction:', destroyError);
           }
-          response = 'Failed to process recording. Please try again.';
         }
       }
+    } else {
+      // If there's a connection but no active session, just destroy the connection
+      if (connection) {
+        console.log('[Leave Command] Destroying voice connection (no active session)');
+        connection.destroy();
+      }
+      await interaction.followUp('✅ Left the voice channel!');
     }
-
-    // Handle voice connection if exists
-    if (connection) {
-      console.log('[Leave Command] Destroying voice connection...');
-      connection.destroy();
-      response = response || 'Left the voice channel!';
-    }
-
-    await interaction.reply(response);
   } catch (error) {
-    console.error(error);
+    console.error('[Leave Command] Unhandled error:', error);
+    if (error instanceof Error) {
+      console.error('[Leave Command] Error name:', error.name);
+      console.error('[Leave Command] Error message:', error.message);
+      console.error('[Leave Command] Stack trace:', error.stack);
+    }
     await interaction.reply({
       content: 'Failed to leave the voice channel!',
       ephemeral: true,
